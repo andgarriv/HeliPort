@@ -67,9 +67,9 @@ class PrefsViewWiFiInfoModal: NSWindow {
         pop.menu?.addItem(.separator())
         //pop?.addItem(withTitle: NSLocalizedString("Dynamic WEP", comment: ""))
         pop.addItem(withTitle: .wpa1_2_Enterprise)
-        //pop?.addItem(withTitle: NSLocalizedString("WPA2/WPA3 Enterprise", comment: ""))
+        pop.addItem(withTitle: .wpa2_3_Enterprise)
         pop.addItem(withTitle: .wpa2Enterprise)
-        //pop?.addItem(withTitle: NSLocalizedString("WPA3 Enterprise", comment: ""))
+        pop.addItem(withTitle: .wpa3Enterprise)
 
         // swiftlint:enable comment_spacing
 
@@ -219,7 +219,7 @@ class PrefsViewWiFiInfoModal: NSWindow {
 
         setupConstraints()
 
-        securityPop.selectItem(withTitle: NSLocalizedString(networkInfo.auth.security.description))
+        selectSecurity(for: networkInfo.auth.security)
         security(securityPop)
         usernameBox.stringValue = networkInfo.auth.username
         passwdInputBox.stringValue = networkInfo.auth.password
@@ -334,9 +334,9 @@ class PrefsViewWiFiInfoModal: NSWindow {
             }, completionHandler: nil)
 
         case .wpa1_2_Personal,
-             NSLocalizedString("WPA2/WPA3 Personal", comment: ""),
+             .wpa2_3_Personal,
              .wpa2Personal,
-             NSLocalizedString("WPA3 Personal", comment: ""):
+             .wpa3Personal:
 
             self.usernameLabel.isHidden = true
             self.usernameBox.isHidden = true
@@ -359,9 +359,9 @@ class PrefsViewWiFiInfoModal: NSWindow {
 
             passwdSecureBox.becomeFirstResponder()
         case .wpa1_2_Enterprise,
-             NSLocalizedString("WPA2/WPA3 Enterprise", comment: ""),
+             .wpa2_3_Enterprise,
              .wpa2Enterprise,
-             NSLocalizedString("WPA3 Enterprise", comment: ""):
+             .wpa3Enterprise:
 
             self.passwdInputBox.isHidden = true
 
@@ -391,6 +391,35 @@ class PrefsViewWiFiInfoModal: NSWindow {
             alert.runModal()
             return
         }
+    }
+
+    private func selectSecurity(for security: itl80211_security) {
+        let titles: [String]
+        switch security {
+        case ITL80211_SECURITY_NONE:
+            titles = [.none]
+        case ITL80211_SECURITY_WPA_PERSONAL, ITL80211_SECURITY_WPA_PERSONAL_MIXED:
+            titles = [.wpa1_2_Personal]
+        case ITL80211_SECURITY_WPA2_PERSONAL, ITL80211_SECURITY_PERSONAL:
+            titles = [.wpa2Personal, .wpa1_2_Personal]
+        case ITL80211_SECURITY_WPA_ENTERPRISE, ITL80211_SECURITY_WPA_ENTERPRISE_MIXED:
+            titles = [.wpa1_2_Enterprise]
+        case ITL80211_SECURITY_WPA2_ENTERPRISE:
+            titles = [.wpa2Enterprise, .wpa2_3_Enterprise, .wpa1_2_Enterprise]
+        case ITL80211_SECURITY_ENTERPRISE:
+            titles = [.wpa2_3_Enterprise, .wpa2Enterprise, .wpa1_2_Enterprise]
+        case ITL80211_SECURITY_WPA3_ENTERPRISE:
+            titles = [.wpa3Enterprise, .wpa2_3_Enterprise, .wpa2Enterprise]
+        default:
+            titles = []
+        }
+
+        for title in titles where securityPop.item(withTitle: title) != nil {
+            securityPop.selectItem(withTitle: title)
+            return
+        }
+
+        securityPop.selectItem(withTitle: NSLocalizedString(security.description))
     }
 
     @objc private func showPasswd(_ sender: Any?) {
@@ -437,9 +466,13 @@ private extension String {
     static let security = NSLocalizedString("Security:")
     static let none = NSLocalizedString(ITL80211_SECURITY_NONE.description)
     static let wpa1_2_Personal = NSLocalizedString(ITL80211_SECURITY_WPA_PERSONAL_MIXED.description)
+    static let wpa2_3_Personal = NSLocalizedString("WPA2/WPA3 Personal")
     static let wpa2Personal = NSLocalizedString(ITL80211_SECURITY_WPA2_PERSONAL.description)
+    static let wpa3Personal = NSLocalizedString(ITL80211_SECURITY_WPA3_PERSONAL.description)
     static let wpa1_2_Enterprise = NSLocalizedString(ITL80211_SECURITY_WPA_ENTERPRISE_MIXED.description)
+    static let wpa2_3_Enterprise = NSLocalizedString("WPA2/WPA3 Enterprise")
     static let wpa2Enterprise = NSLocalizedString(ITL80211_SECURITY_WPA2_ENTERPRISE.description)
+    static let wpa3Enterprise = NSLocalizedString(ITL80211_SECURITY_WPA3_ENTERPRISE.description)
     static let username = NSLocalizedString("Username:")
     static let password = NSLocalizedString("Password:")
     static let close = NSLocalizedString("Close")

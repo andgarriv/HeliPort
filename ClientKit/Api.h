@@ -63,6 +63,7 @@ bool get_network_bssid(char *bssid);
 bool get_network_list(network_info_list_t *list);
 
 bool connect_network(const char *ssid, const char *pwd);
+bool connect_network_with_auth(const char *ssid, uint32_t security, const char *username, const char *pwd);
 
 bool is_power_on(void);
 
@@ -77,6 +78,10 @@ kern_return_t join_ssid(const char *ssid, const char *pwd);
 kern_return_t associate_ssid(const char *ssid, const char *pwd);
 
 kern_return_t dis_associate_ssid(const char *ssid);
+
+kern_return_t set_key_available(const uint8_t *bssid, const uint8_t *pmk, uint32_t lifetime);
+
+kern_return_t run_key(const uint8_t *bssid);
 
 void api_terminate(void);
 

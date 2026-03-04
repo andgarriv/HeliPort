@@ -2,8 +2,8 @@
 //  NetworkManager.swift
 //  HeliPort
 //
-//  Created by 梁怀宇 on 2020/3/23.
-//  Copyright © 2020 OpenIntelWireless. All rights reserved.
+//  Created by OpenIntelWireless on 2020/3/23.
+//  Copyright (c) 2020 OpenIntelWireless. All rights reserved.
 //
 
 /*
@@ -13,7 +13,7 @@
  * https://opensource.org/licenses/BSD-3-Clause
  */
 
-import Foundation
+import Cocoa
 import SystemConfiguration
 
 final class NetworkManager {
@@ -23,7 +23,12 @@ final class NetworkManager {
         ITL80211_SECURITY_WPA_PERSONAL,
         ITL80211_SECURITY_WPA_PERSONAL_MIXED,
         ITL80211_SECURITY_WPA2_PERSONAL,
-        ITL80211_SECURITY_PERSONAL
+        ITL80211_SECURITY_PERSONAL,
+        ITL80211_SECURITY_WPA_ENTERPRISE,
+        ITL80211_SECURITY_WPA_ENTERPRISE_MIXED,
+        ITL80211_SECURITY_WPA2_ENTERPRISE,
+        ITL80211_SECURITY_ENTERPRISE,
+        ITL80211_SECURITY_WPA3_ENTERPRISE
     ]
 
     static func connect(networkInfo: NetworkInfo, saveNetwork: Bool = false,
@@ -39,7 +44,15 @@ final class NetworkManager {
         let getAuthInfoCallback: (_ auth: NetworkAuth, _ savePassword: Bool) -> Void = { auth, savePassword in
             DispatchQueue.global(qos: .background).async {
                 StatusBarIcon.shared().connecting()
-                let result = connect_network(networkInfo.ssid, auth.password)
+                let result: Bool
+                if NetworkManager.requiresUsername(for: networkInfo.auth.security) {
+                    result = NetworkManager.connectEnterpriseNetwork(networkInfo: networkInfo, auth: auth)
+                } else {
+                    result = connect_network_with_auth(networkInfo.ssid,
+                                                       UInt32(networkInfo.auth.security.rawValue),
+                                                       auth.username,
+                                                       auth.password)
+                }
                 DispatchQueue.main.async {
                     if result {
                         if savePassword {
@@ -63,8 +76,12 @@ final class NetworkManager {
                 return
             }
 
+            let requiresPassword = networkInfo.auth.password.isEmpty
+            let requiresEnterpriseUsername = requiresUsername(for: networkInfo.auth.security) &&
+                networkInfo.auth.username.isEmpty
+
             guard networkInfo.auth.security != ITL80211_SECURITY_NONE,
-                  networkInfo.auth.password.isEmpty else {
+                  requiresPassword || requiresEnterpriseUsername else {
                 getAuthInfoCallback(networkInfo.auth, saveNetwork)
                 return
             }
@@ -290,38 +307,284 @@ final class NetworkManager {
     }
 
     static func getSecurityType(_ info: ioctl_network_info) -> itl80211_security {
-        if info.supported_rsnprotos & ITL80211_PROTO_RSN.rawValue != 0 {
-            // WPA2
-            if info.rsn_akms & ITL80211_AKM_8021X.rawValue != 0 {
-                if info.supported_rsnprotos & ITL80211_PROTO_WPA.rawValue != 0 {
-                    return ITL80211_SECURITY_WPA_ENTERPRISE_MIXED
+        let hasRSN = info.supported_rsnprotos & ITL80211_PROTO_RSN.rawValue != 0
+        let hasWPA = info.supported_rsnprotos & ITL80211_PROTO_WPA.rawValue != 0
+
+        let has8021X = info.rsn_akms & ITL80211_AKM_8021X.rawValue != 0
+        let hasSHA256_8021X = info.rsn_akms & ITL80211_AKM_SHA256_8021X.rawValue != 0
+        let hasPSK = info.rsn_akms & ITL80211_AKM_PSK.rawValue != 0
+        let hasSHA256_PSK = info.rsn_akms & ITL80211_AKM_SHA256_PSK.rawValue != 0
+
+        if hasRSN {
+            if has8021X || hasSHA256_8021X {
+                if has8021X && hasSHA256_8021X {
+                    return ITL80211_SECURITY_ENTERPRISE
                 }
-                return ITL80211_SECURITY_WPA2_ENTERPRISE
-            } else if info.rsn_akms & ITL80211_AKM_PSK.rawValue != 0 {
-                if info.supported_rsnprotos & ITL80211_PROTO_WPA.rawValue != 0 {
-                    return ITL80211_SECURITY_WPA_PERSONAL_MIXED
+                if has8021X {
+                    return hasWPA ? ITL80211_SECURITY_WPA_ENTERPRISE_MIXED : ITL80211_SECURITY_WPA2_ENTERPRISE
                 }
-                return ITL80211_SECURITY_WPA2_PERSONAL
-            } else if info.rsn_akms & ITL80211_AKM_SHA256_8021X.rawValue != 0 {
-                return ITL80211_SECURITY_WPA2_ENTERPRISE
-            } else if info.rsn_akms & ITL80211_AKM_SHA256_PSK.rawValue != 0 {
+                return ITL80211_SECURITY_WPA3_ENTERPRISE
+            }
+
+            if hasPSK || hasSHA256_PSK {
+                if hasPSK && hasSHA256_PSK {
+                    return ITL80211_SECURITY_PERSONAL
+                }
+                if hasPSK {
+                    return hasWPA ? ITL80211_SECURITY_WPA_PERSONAL_MIXED : ITL80211_SECURITY_WPA2_PERSONAL
+                }
                 return ITL80211_SECURITY_PERSONAL
             }
-        } else if info.supported_rsnprotos & ITL80211_PROTO_WPA.rawValue != 0 {
-            // WPA
-            if info.rsn_akms & ITL80211_AKM_8021X.rawValue != 0 {
+        } else if hasWPA {
+            if has8021X || hasSHA256_8021X {
                 return ITL80211_SECURITY_WPA_ENTERPRISE
-            } else if info.rsn_akms & ITL80211_AKM_PSK.rawValue != 0 {
+            }
+            if hasPSK || hasSHA256_PSK {
                 return ITL80211_SECURITY_WPA_PERSONAL
-            } else if info.rsn_akms & ITL80211_AKM_SHA256_8021X.rawValue != 0 {
-                return ITL80211_SECURITY_WPA_ENTERPRISE
-            } else if info.rsn_akms & ITL80211_AKM_SHA256_PSK.rawValue != 0 {
-                return ITL80211_SECURITY_ENTERPRISE
             }
         } else if info.supported_rsnprotos == 0 {
             return ITL80211_SECURITY_NONE
         }
         return ITL80211_SECURITY_UNKNOWN
+    }
+
+    private static func requiresUsername(for security: itl80211_security) -> Bool {
+        switch security {
+        case ITL80211_SECURITY_WPA_ENTERPRISE,
+             ITL80211_SECURITY_WPA_ENTERPRISE_MIXED,
+             ITL80211_SECURITY_WPA2_ENTERPRISE,
+             ITL80211_SECURITY_ENTERPRISE,
+             ITL80211_SECURITY_WPA3_ENTERPRISE:
+            return true
+        default:
+            return false
+        }
+    }
+    private static func connectEnterpriseNetwork(networkInfo: NetworkInfo, auth: NetworkAuth) -> Bool {
+        if auth.username.isEmpty || auth.password.isEmpty {
+            Log.error("Enterprise credentials missing for \(networkInfo.ssid)")
+            return false
+        }
+
+        // If a PMK is already available (hex), use IOCTL KEYAVAIL/KEYRUN path.
+        if isHexPMK(auth.password) {
+            return connect_network_with_auth(networkInfo.ssid,
+                                             UInt32(networkInfo.auth.security.rawValue),
+                                             auth.username,
+                                             auth.password)
+        }
+
+        return runSupplicantTTLS(networkInfo: networkInfo, auth: auth)
+    }
+
+    private static func runSupplicantTTLS(networkInfo: NetworkInfo, auth: NetworkAuth) -> Bool {
+        guard let interfaceName = currentInterfaceName() else {
+            Log.error("Cannot determine interface name for enterprise supplicant")
+            return false
+        }
+
+        guard let supplicantPath = firstExecutablePath([
+            "/opt/homebrew/sbin/wpa_supplicant",
+            "/usr/local/sbin/wpa_supplicant",
+            "/usr/sbin/wpa_supplicant"
+        ]) else {
+            Log.error("wpa_supplicant not found. Install wpa_supplicant to use EAP-TTLS.")
+            return false
+        }
+
+        let cliPath = firstExecutablePath([
+            "/opt/homebrew/bin/wpa_cli",
+            "/usr/local/bin/wpa_cli",
+            "/usr/sbin/wpa_cli"
+        ])
+
+        let pidFile = "/var/run/heliport-\(interfaceName)-supplicant.pid"
+        let configPath = "\(NSTemporaryDirectory())heliport-\(UUID().uuidString).conf"
+
+        do {
+            try buildTTLSConfig(networkInfo: networkInfo, auth: auth).write(
+                toFile: configPath,
+                atomically: true,
+                encoding: .utf8
+            )
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configPath)
+        } catch {
+            Log.error("Failed to write supplicant config: \(error.localizedDescription)")
+            return false
+        }
+
+        defer {
+            try? FileManager.default.removeItem(atPath: configPath)
+        }
+
+        let startCommand = """
+        if [ -f \(shellQuote(pidFile)) ]; then
+            oldpid=$(cat \(shellQuote(pidFile)) 2>/dev/null || true)
+            if [ -n "$oldpid" ]; then
+                kill "$oldpid" >/dev/null 2>&1 || true
+            fi
+        fi
+        \(shellQuote(supplicantPath)) -B -D bsd -i \(shellQuote(interfaceName)) -c \(shellQuote(configPath)) -P \(shellQuote(pidFile))
+        """
+        let startResult = executePrivilegedShell(startCommand)
+        if startResult.1 != 0 {
+            Log.error("Failed to start wpa_supplicant for \(networkInfo.ssid)")
+            return false
+        }
+
+        let connected: Bool
+        if let cliPath = cliPath {
+            connected = waitForSupplicantCompletion(
+                cliPath: cliPath,
+                interfaceName: interfaceName,
+                expectedSSID: networkInfo.ssid,
+                timeoutSeconds: 30
+            )
+        } else {
+            // Fallback if wpa_cli is unavailable.
+            connected = waitForRunState(ssid: networkInfo.ssid, timeoutSeconds: 30)
+        }
+
+        if !connected {
+            let stopCommand = """
+            if [ -f \(shellQuote(pidFile)) ]; then
+                oldpid=$(cat \(shellQuote(pidFile)) 2>/dev/null || true)
+                if [ -n "$oldpid" ]; then
+                    kill "$oldpid" >/dev/null 2>&1 || true
+                fi
+                rm -f \(shellQuote(pidFile))
+            fi
+            """
+            _ = executePrivilegedShell(stopCommand)
+            Log.error("Enterprise TTLS authentication failed for \(networkInfo.ssid)")
+        }
+
+        return connected
+    }
+
+    private static func buildTTLSConfig(networkInfo: NetworkInfo, auth: NetworkAuth) -> String {
+        let ssid = wpaQuote(networkInfo.ssid)
+        let username = wpaQuote(auth.username)
+        let password = wpaQuote(auth.password)
+        let pmf = networkInfo.auth.security == ITL80211_SECURITY_WPA3_ENTERPRISE ? 2 : 1
+
+        return """
+        ctrl_interface=/var/run/wpa_supplicant
+        ap_scan=1
+        fast_reauth=1
+        network={
+            ssid="\(ssid)"
+            key_mgmt=WPA-EAP WPA-EAP-SHA256
+            proto=RSN
+            pairwise=CCMP
+            group=CCMP
+            eap=TTLS
+            identity="\(username)"
+            password="\(password)"
+            phase2="auth=MSCHAPV2"
+            ieee80211w=\(pmf)
+            priority=5
+        }
+        """
+    }
+
+    private static func waitForSupplicantCompletion(cliPath: String,
+                                                    interfaceName: String,
+                                                    expectedSSID: String,
+                                                    timeoutSeconds: Int) -> Bool {
+        let waitCommand = """
+        i=0
+        while [ "$i" -lt \(timeoutSeconds) ]; do
+            status=$(\(shellQuote(cliPath)) -p /var/run/wpa_supplicant -i \(shellQuote(interfaceName)) status 2>/dev/null || true)
+            state=$(printf "%s\\n" "$status" | /usr/bin/awk -F= '/^wpa_state=/{print $2}')
+            current=$(printf "%s\\n" "$status" | /usr/bin/awk -F= '/^ssid=/{print $2}')
+
+            if [ "$state" = "COMPLETED" ] && [ "$current" = \(shellQuote(expectedSSID)) ]; then
+                exit 0
+            fi
+
+            i=$((i + 1))
+            sleep 1
+        done
+        exit 1
+        """
+
+        return executePrivilegedShell(waitCommand).1 == 0
+    }
+
+    private static func waitForRunState(ssid: String, timeoutSeconds: Int) -> Bool {
+        for _ in 0..<timeoutSeconds {
+            var state: UInt32 = 0
+            if get_80211_state(&state), state == ITL80211_S_RUN {
+                var staInfo = station_info_t()
+                if get_station_info(&staInfo) == KERN_SUCCESS {
+                    if String(ssid: staInfo.ssid) == ssid {
+                        return true
+                    }
+                }
+            }
+            Thread.sleep(forTimeInterval: 1)
+        }
+
+        return false
+    }
+
+    private static func currentInterfaceName() -> String? {
+        var platformInfo = platform_info_t()
+        guard get_platform_info(&platformInfo) else {
+            return nil
+        }
+        let name = String(cCharArray: platformInfo.device_info_str)
+        return name.isEmpty ? nil : name
+    }
+
+    private static func executePrivilegedShell(_ command: String) -> (String?, Int32) {
+        let escaped = command
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let scriptSource = "do shell script \"\(escaped)\" with administrator privileges"
+
+        var errorInfo: NSDictionary?
+        let script = NSAppleScript(source: scriptSource)
+        let descriptor = script?.executeAndReturnError(&errorInfo)
+
+        if let errorInfo {
+            let code = (errorInfo[NSAppleScript.errorNumber] as? Int32) ?? 1
+            let message = (errorInfo[NSAppleScript.errorMessage] as? String) ?? "Unknown script failure"
+            Log.error("Privileged command failed (\(code)): \(message)")
+            return (nil, code)
+        }
+
+        let output = descriptor?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (output?.isEmpty == true ? nil : output, 0)
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        return "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private static func wpaQuote(_ value: String) -> String {
+        return value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private static func firstExecutablePath(_ candidates: [String]) -> String? {
+        return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+    }
+
+    private static func isHexPMK(_ value: String) -> Bool {
+        let candidate: String
+        if value.lowercased().hasPrefix("pmk:") {
+            candidate = String(value.dropFirst(4))
+        } else {
+            candidate = value
+        }
+
+        if candidate.count != 64 {
+            return false
+        }
+        return candidate.range(of: "^[0-9a-fA-F]{64}$", options: .regularExpression) != nil
     }
 
     private static func getRouterAddressFromNetstat(_ bsd: String) -> String? {

@@ -76,28 +76,19 @@ class WiFiConfigWindow: NSWindow {
         pop.addItem(withTitle: .none)
         pop.menu?.addItem(.separator())
 
-        // swiftlint:disable comment_spacing
-
         pop.addItems(withTitles: [
-
-            //.wep,
             .wpa_1_2_Personal,
-            //.wpa_2_3_Personal,
             .wpaPersonal,
             .wpa2Personal
-            //,.wpa3Personal
         ])
-        /*
+
         pop.menu?.addItem(.separator())
         pop.addItems(withTitles: [
-            .dynamicWEP,
             .wpa_1_2_Enterprise,
             .wpa_2_3_Enterprise,
             .wpa2Enterprise,
             .wpa3Enterprise
         ])
-         */
-        // swiftlint:enable comment_spacing
 
         pop.action = #selector(security(_:))
         return pop
@@ -337,7 +328,7 @@ class WiFiConfigWindow: NSWindow {
             networkBox.stringValue = networkInfo!.ssid
             gridView.row(at: .networkRow).isHidden = true
             gridView.row(at: .securityRow).isHidden = true
-            securityPop.selectItem(withTitle: securityString)
+            selectSecurity(for: networkInfo!.auth.security)
             security(nil)
         case .viewCredentialsWiFi:
             titleLabel.stringValue = String(format: .credentialsTitle, networkInfo!.ssid)
@@ -349,8 +340,9 @@ class WiFiConfigWindow: NSWindow {
             usernameBox.isSelectable = false
             passwdInputBox.isSelectable = false
             passwdSecureBox.isSelectable = false
-            securityPop.selectItem(withTitle: NSLocalizedString(networkInfo!.auth.security.description))
+            selectSecurity(for: networkInfo!.auth.security)
             security(nil)
+            usernameBox.stringValue = networkInfo!.auth.username
             passwdSecureBox.stringValue = networkInfo!.auth.password
             passwdInputBox.stringValue = networkInfo!.auth.password
             rightButton.title = .close
@@ -430,10 +422,13 @@ extension WiFiConfigWindow: NSTextFieldDelegate {
             return
         }
 
-        // password is too short, less than 8 characters
+        // Enterprise credentials can have shorter passwords than WPA-PSK.
+        let minimumPasswordLength = isEnterpriseSelection(securityPop.title) ? 1 : 8
+
+        // password is too short
         guard !passwdInputBox.isHidden || !passwdSecureBox.isHidden,
-            passwdSecureBox.stringValue.count >= 8,
-            passwdInputBox.stringValue.count >= 8  else {
+            passwdSecureBox.stringValue.count >= minimumPasswordLength,
+            passwdInputBox.stringValue.count >= minimumPasswordLength  else {
             rightButton.isEnabled = false
             return
         }
@@ -533,8 +528,54 @@ extension WiFiConfigWindow {
         textBox.currentEditor()?.selectedRange = NSRange(location: "\(textBox)".count, length: 0)
     }
 
+    private func selectSecurity(for security: itl80211_security) {
+        let titles: [String]
+        switch security {
+        case ITL80211_SECURITY_NONE:
+            titles = [.none]
+        case ITL80211_SECURITY_WPA_PERSONAL:
+            titles = [.wpaPersonal, .wpa_1_2_Personal]
+        case ITL80211_SECURITY_WPA_PERSONAL_MIXED:
+            titles = [.wpa_1_2_Personal]
+        case ITL80211_SECURITY_WPA2_PERSONAL:
+            titles = [.wpa2Personal, .wpa_1_2_Personal]
+        case ITL80211_SECURITY_PERSONAL:
+            titles = [.wpa2Personal, .wpa_1_2_Personal]
+        case ITL80211_SECURITY_WPA_ENTERPRISE:
+            titles = [.wpa_1_2_Enterprise]
+        case ITL80211_SECURITY_WPA_ENTERPRISE_MIXED:
+            titles = [.wpa_1_2_Enterprise]
+        case ITL80211_SECURITY_WPA2_ENTERPRISE:
+            titles = [.wpa2Enterprise, .wpa_2_3_Enterprise, .wpa_1_2_Enterprise]
+        case ITL80211_SECURITY_ENTERPRISE:
+            titles = [.wpa_2_3_Enterprise, .wpa2Enterprise, .wpa_1_2_Enterprise]
+        case ITL80211_SECURITY_WPA3_ENTERPRISE:
+            titles = [.wpa3Enterprise, .wpa_2_3_Enterprise, .wpa2Enterprise]
+        default:
+            titles = []
+        }
+
+        for title in titles where securityPop.item(withTitle: title) != nil {
+            securityPop.selectItem(withTitle: title)
+            return
+        }
+
+        securityPop.selectItem(withTitle: NSLocalizedString(security.description))
+    }
+
+    private func isEnterpriseSelection(_ title: String) -> Bool {
+        switch title {
+        case .wpa_1_2_Enterprise, .wpa_2_3_Enterprise, .wpa2Enterprise, .wpa3Enterprise:
+            return true
+        default:
+            return false
+        }
+    }
+
     private func connect() {
         guard let network = networkInfo else { return }
+        network.auth.username = usernameBox.stringValue
+        network.auth.identity = [UInt8](network.auth.username.utf8)
         network.auth.password = passwdInputBox.stringValue
         getAuthInfoCallback?(network.auth, isSave.state == .on)
         close()
@@ -542,6 +583,8 @@ extension WiFiConfigWindow {
 
     private func joinWiFi() {
         let network = NetworkInfo(ssid: networkBox.stringValue)
+        network.auth.username = usernameBox.stringValue
+        network.auth.identity = [UInt8](network.auth.username.utf8)
         network.auth.password = passwdInputBox.stringValue
 
         switch securityPop.title {
@@ -555,8 +598,12 @@ extension WiFiConfigWindow {
             network.auth.security = ITL80211_SECURITY_WPA2_PERSONAL
         case .wpa_1_2_Enterprise:
             network.auth.security = ITL80211_SECURITY_WPA_ENTERPRISE_MIXED
+        case .wpa_2_3_Enterprise:
+            network.auth.security = ITL80211_SECURITY_ENTERPRISE
         case .wpa2Enterprise:
             network.auth.security = ITL80211_SECURITY_WPA2_ENTERPRISE
+        case .wpa3Enterprise:
+            network.auth.security = ITL80211_SECURITY_WPA3_ENTERPRISE
         default:
             network.auth.security = ITL80211_SECURITY_UNKNOWN
         }
